@@ -1,7 +1,7 @@
 /*
   Water Circulation Control System w/ Flow Rate Feedback Control
 
-      The program integrates two sensors and pumps, namely a water pressure sensor and a flow sensor.
+      The program integrates two sensors and pumps, namely, a water pressure sensor and a flow sensor.
   The flow rate and pressure can be read through a personal computer, and the pump speed percentage (PWM)
   can be set through the serial port.
 
@@ -14,7 +14,7 @@
   - Kamoer KDS Peristaltic Pump (KDS-FE-2-S17B)
       12V DC brush motor
 
-  Created 18 Nov. 2020
+  Created 2 Dec. 2020
   by Yi-Xuan Wang
 
   References:
@@ -32,7 +32,7 @@
 #define flowPin 2   // Pin location of the sensor (D2) w/ interrupt (INT.1)
 #define sigPin A0   // Potentiometer signal pin w/ ADC
 
-#define N 800       // Measurment sampling number for smoothing
+#define N 800       // Measurement sampling number for smoothing
 
 /*--- Constants ---*/
 const unsigned long baudSpeed = 115200; // Sets the data rate in bits per second (baud) for serial data transmission
@@ -49,15 +49,15 @@ const float pgVmax = 4.5;             // Maximum output voltage of pressure sens
 const float pgVmin = 0.5;             // Minimum output voltage of pressure sensor
 const float offSet = 0.471772766113;  // Norminal value is 0.5 V
 
-const byte tolerance = 10;     // Tolerance of flow rate (%)
-const float adjFactor = 0.002; // Adjustment factor of feedback level
+const byte tolerance = 10;            // Tolerance of flow rate (%)
+const float adjFactor = 0.002;        // Adjustment factor of feedback level
 
 /*--- Global Variables ---*/
 unsigned long startTime;            // Start time
 unsigned long currentTime;          // Current time
 unsigned long timer;                // Stopwatch
 
-byte percent;                       // Percentage of pump PWM
+volatile byte percent;              // Percentage of pump PWM
 
 float vOut;                         // Output of the ADC
 float waterPres;                    // Value of water pressure
@@ -69,14 +69,16 @@ float flowML;                       // Unit converter (milliliter, mL)
 float totalML;                      // Volume of cumulative water
 
 // Target flow rate, and it tolerance
-float targetFlow; // Manual adj.
-float flowDev;
+float targetFlow;                   // Manual adjustment
 float toleranceFlow;
-float flowUL; // Upper limit of flow rate (mL/min)
-float flowLL; // Lower limit of flow rate (mL/min)
+float flowUL;                       // Upper limit of flow rate (mL/min)
+float flowLL;                       // Lower limit of flow rate (mL/min)
+volatile float flowDev;
 
 /*--- Function Prototype ---*/
 void getCounter(void);
+void flushReceive(void);
+void i2cTransmit(const byte , byte );
 float getwaterPres(float );
 void waterPressure(const byte );
 void feedbackPWM(float );
@@ -99,12 +101,7 @@ void setup(void) {
   Serial.print("Initial Speed: ");  
   Serial.print(percent);
   Serial.println(" %");
-  // Flush the receive buffer
-  Serial.flush(); 
-  while (Serial.read() >= 0) { }
-  Wire.beginTransmission(PUMP_CTRL);
-  Wire.write(percent);
-  Wire.endTransmission();
+  i2cTransmit(PUMP_CTRL, percent);
 
   // Water Pressure Sensor Initialization
   vOut = 0.0;
@@ -142,7 +139,7 @@ void loop(void) {
     Serial.print(", Voltage: ");
     Serial.print(vOut, 12);
     Serial.print(" V, ");
-    // Unit converter for pressure, raw unit: MPa
+    // Unit converter for pressure raw unit: MPa
     Serial.print("Pressure: ");
     Serial.print(waterPres * 1000, 1);    // 1 : 1000
     Serial.print(" kPa, ");
@@ -164,6 +161,7 @@ void loop(void) {
     Serial.print(timer);
     Serial.println(" sec.");
 
+    // Feedback Condition
     if (targetFlow != 0) {
       feedbackPWM(flowML);
     }
@@ -185,6 +183,29 @@ void getCounter(void) {
   return;
 }
 
+// Flush Receive Buffer
+void flushReceive(void) {
+  while (Serial.available()) { // Serial specific 
+    Serial.read();
+    Serial.flush();
+  }
+
+  while (Wire.available()) {   // Wiring specific 
+    Wire.read();
+  }
+
+  return;
+}
+
+// Implementation of I2C Transmission
+void i2cTransmit(const byte address, byte data) { 
+  Wire.beginTransmission(address);
+  Wire.write(data);
+  Wire.endTransmission();
+
+  return;
+}
+
 // Implementation of Water Pressure Calculation
 float getwaterPres(float volt) {
   return ((volt - offSet) * ((pgMax - pgMin) / (pgVmax - pgVmin))) + pgMin;
@@ -192,7 +213,7 @@ float getwaterPres(float volt) {
 
 // Water Pressure Sensor
 void waterPressure(const byte signalPin) {
-  for (unsigned int i = 0; i < N; ++i) {    // Get samples for smooth the value
+  for (unsigned int i = 0; i < N; ++i) {    // Get samples with smooth value
     vOut = vOut + analogRead(signalPin);
     delay(1);                               // delay in between reads for stability
   }
@@ -200,6 +221,7 @@ void waterPressure(const byte signalPin) {
 
   waterPres = getwaterPres(vOut);           // Calculate water pressure
 
+  // Determines whether a value is an infinity, and a number
   if (isinf(waterPres) || isnan(waterPres)) {
     waterPres = -1;
   } else {
@@ -208,12 +230,12 @@ void waterPressure(const byte signalPin) {
 }
 
 // Implementation of Flow Rate Calculation
-void flowCal(unsigned int pulse) {
-  // Estimated Volume: 0.5004 ml/Pulse
+void flowCal(unsigned int pulse) { // Estimated Volume: 0.5004 ml/Pulse
   flowRate = abs(((-7.0 * pow(10.0, -18.0)) * sq(pulse)) + (0.5004 * pulse) - (8.0 * pow(10.0, -12.0)));
   flowML = flowRate * 60.0; // Milliliter per pulse converter to milliliter per minute
 
-  if (isinf(flowML) || isnan(flowML) || (flowML <= 0.0)) {
+  // Determines whether a value is an infinity, a number or negative
+  if (isinf(flowML) || isnan(flowML) || signbit(flowML)) {
     flowML = -1;
   } else {
     return;
@@ -221,14 +243,13 @@ void flowCal(unsigned int pulse) {
 }
 
 // Implementation of Flow Rate Feedback-driven Control
-void feedbackPWM(float currentFlow) { // Detected current flow rate, and it comparison
+void feedbackPWM(float currentFlow) { // Detect current flow rate, and it comparison
   if ((flowML >= flowLL) && (flowML <= flowUL)) {
     return;
   } else {
     flowDev = ((targetFlow - currentFlow) * tolerance) * adjFactor;
     percent = percent + flowDev;
 
-    Serial.println("|");
     Serial.print(percent);
     Serial.print(" %, ");
     Serial.print("Target Flow Rate: ");
@@ -240,28 +261,14 @@ void feedbackPWM(float currentFlow) { // Detected current flow rate, and it comp
     Serial.print("), ");
     Serial.print("Deviation: ");
     Serial.println(flowDev);
-    Serial.println("|");
 
-    // Set percentage of PWM
-    Wire.beginTransmission(PUMP_CTRL);
-    Wire.write(percent);
-    Wire.endTransmission();
+    i2cTransmit(PUMP_CTRL, percent); // Set percentage of PWM
   }
 }
 
+// Input Processing and Output Controls
 void serialEvent(void) {
   if (Serial.available()) {
-/*
-    percent = Serial.parseInt(); // Input the percentage of PWM to serial port
-
-    Serial.print("Pump PWM Set to: ");
-    Serial.print(percent);
-    Serial.println(" %");
-
-    Wire.beginTransmission(PUMP_CTRL);
-    Wire.write(percent);
-    Wire.endTransmission();
-*/
     targetFlow = Serial.parseInt(); // Input the flow rate of target to serial port
     if (targetFlow > 0.0) {
       toleranceFlow = (targetFlow / 100.0) * tolerance;
@@ -275,18 +282,14 @@ void serialEvent(void) {
       Serial.print(" - ");
       Serial.print(flowUL);
       Serial.println(")");
-  
-      // Flush the receive buffer
-      Serial.flush(); 
-      while (Serial.read() >= 0) { }
+      flushReceive();
     } else if (targetFlow == -1) {
       percent = 0;
+
       Serial.print("Return to Zero: ");
       Serial.print(percent);
       Serial.println(" %");
-      Wire.beginTransmission(PUMP_CTRL);
-      Wire.write(percent);
-      Wire.endTransmission();
+      i2cTransmit(PUMP_CTRL, percent);
     }
   } else {
     return;
