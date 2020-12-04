@@ -100,7 +100,7 @@ void setup(void) {
   percent = 100;
   Serial.print("Initial Speed: ");  
   Serial.print(percent);
-  Serial.println(" %");
+  Serial.println("%");
   i2cTransmit(PUMP_CTRL, percent);
 
   // Water Pressure Sensor Initialization
@@ -134,7 +134,7 @@ void loop(void) {
     /*--- Sensor prompt ---*/
     Serial.print("Measuring, Speed: ");
     Serial.print(percent);
-    Serial.print(" %, ");
+    Serial.print("%, ");
 /*
     Serial.print(", Voltage: ");
     Serial.print(vOut, 12);
@@ -251,7 +251,7 @@ void feedbackPWM(float currentFlow) { // Detect current flow rate, and it compar
     percent = percent + flowDev;
 
     Serial.print(percent);
-    Serial.print(" %, ");
+    Serial.print("%, ");
     Serial.print("Target Flow Rate: ");
     Serial.print(targetFlow);
     Serial.print(" mL/min. (");
@@ -288,7 +288,7 @@ void serialEvent(void) {
 
       Serial.print("Return to Zero: ");
       Serial.print(percent);
-      Serial.println(" %");
+      Serial.println("%");
       i2cTransmit(PUMP_CTRL, percent);
     }
   } else {
